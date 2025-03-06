@@ -1,0 +1,45 @@
+esphome:
+  name: magiquest-wand-logger
+  platform: ESP8266
+  board: d1_mini
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # The fallback AP will start if the above fails
+  ap:
+    ssid: "EspHome-MagiQuestWand-AP"
+    password: "letmeesp"
+
+logger:
+  level: DEBUG
+
+ota:
+  platform: esphome
+
+api:
+
+remote_receiver:
+  pin:
+    number: D5
+    inverted: true
+  dump: magiquest
+  tolerance:
+    type: percentage
+    value: 45%
+  on_magiquest:
+    then:
+      - homeassistant.event:
+          event: esphome.magiquest_wand
+          data:
+            wand_id: !lambda |-
+              // Convert numeric wand ID to a hex string, e.g. "0x02A16784"
+              char buffer[11];
+              sprintf(buffer, "0x%08X", x.wand_id);
+              return std::string(buffer);
+            magnitude: !lambda |-
+              // Also send the magnitude as a hex or decimal if desired
+              char buffer[6];
+              sprintf(buffer, "0x%04X", x.magnitude);
+              return std::string(buffer);
