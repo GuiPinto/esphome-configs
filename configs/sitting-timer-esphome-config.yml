@@ -5,41 +5,154 @@ esphome:
 
 # Enable logging
 logger:
+  level: DEBUG
 
 # Enable I2C
 i2c:
-  sda: D1
-  scl: D2
-  scan: true  # This will log detected I2C devices in the ESPHome logs
+  sda: D3
+  scl: D4
+  scan: true
 
-# LCD Display
+sensor:
+  - platform: template
+    name: "Distance Sensor"
+    id: distance_sensor
+    unit_of_measurement: "in"
+    accuracy_decimals: 1
+    update_interval: 1s
+    filters:
+      - filter_out: nan
+    lambda: |-
+      int pin = D2;
+      pinMode(pin, OUTPUT);
+      digitalWrite(pin, LOW);
+      delay(2);
+      digitalWrite(pin, HIGH);
+      delayMicroseconds(5);
+      digitalWrite(pin, LOW);
+      pinMode(pin, INPUT);
+      unsigned long duration = pulseIn(pin, HIGH, 50000);
+      // ESP_LOGD("ping_sensor", "Raw duration: %lu microseconds", duration);
+      float distance_in = duration * 0.01715f / 2.54f;
+      if (duration > 0 && distance_in < 400) {
+        // ESP_LOGD("ping_sensor", "Valid reading: %.1f in", distance_in);
+        return distance_in;
+      } else {
+        // ESP_LOGD("ping_sensor", "Invalid reading, returning NAN");
+        return NAN;
+      }
+
+binary_sensor:
+  - platform: template
+    name: "Sitting Detected"
+    id: sitting_detected
+    lambda: |-
+      if (id(distance_sensor).has_state()) {
+        float dist = id(distance_sensor).state;
+        if (dist > 0.25 && dist < 20.0) {  // <- Fine-tune sitting distance here
+          return true;
+        }
+      }
+      return false;
+
+globals:
+  - id: time_sitting
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: last_sit_time
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: not_sit_counter
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: sitting_detected
+          then:
+            - lambda: |-
+                id(time_sitting)++;
+                id(not_sit_counter) = 0;
+          else:
+            - lambda: |-
+                id(not_sit_counter)++;
+                if (id(not_sit_counter) == 1) {
+                  id(last_sit_time) = id(time_sitting);
+                }
+                if (id(not_sit_counter) >= 100) { // How long (in seconds) before resetting
+                  id(time_sitting) = 0;
+                  id(last_sit_time) = 0;
+                  id(not_sit_counter) = 0;
+                }
+
 display:
   - platform: lcd_pcf8574
     id: my_lcd
-    address: 0x27  # Common address; check logs if different
-    dimensions: 16x2  # Required option for specifying LCD size
-    update_interval: 1s
+    address: 0x27
+    dimensions: 16x2
+    update_interval: 500ms
     lambda: |-
-      it.print(0, 0, "Hello, ESPHome!");
-      it.print(0, 1, "LCD Test OK!");
+      it.print(0, 0, "                ");
+      it.print(0, 1, "                ");
 
-# Status LED (Optional)
+      int total_seconds = id(time_sitting);
+      int display_time = (id(sitting_detected).state) ? total_seconds : id(last_sit_time);
+
+      int days = display_time / 86400;
+      display_time %= 86400;
+      int hours = display_time / 3600;
+      display_time %= 3600;
+      int minutes = display_time / 60;
+      int seconds = display_time % 60;
+
+      std::string time_str;
+
+      if (days > 0) {
+        char buffer[20];
+        sprintf(buffer, "%d day%s", days, days > 1 ? "s" : "");
+        time_str += buffer;
+        if (hours > 0 || minutes > 0) time_str += ", ";
+      }
+
+      if (hours > 0) {
+        char buffer[20];
+        sprintf(buffer, "%d hour%s", hours, hours > 1 ? "s" : "");
+        time_str += buffer;
+        if (minutes > 0) time_str += " and ";
+      }
+
+      if (minutes > 0) {
+        char buffer[20];
+        sprintf(buffer, "%d minute%s", minutes, minutes > 1 ? "s" : "");
+        time_str += buffer;
+      } else if (hours == 0 && days == 0) {
+        char buffer[20];
+        sprintf(buffer, "%d second%s", seconds, (seconds != 1) ? "s" : "");
+        time_str += buffer;
+      }
+
+      if (id(sitting_detected).state) {
+        it.print(0, 0, "Sitting for");
+      } else if (id(not_sit_counter) < 60 && id(last_sit_time) > 0) {
+        it.print(0, 0, "Sat for");
+      } else {
+        it.print(0, 0, "Not sitting");
+      }
+
+      if (!(id(not_sit_counter) >= 60 && id(last_sit_time) == 0)) {
+        it.print(0, 1, time_str.c_str());
+      }
+
+      if (!(id(not_sit_counter) >= 60 && id(last_sit_time) == 0) && !(id(time_sitting) == 0 && id(last_sit_time) == 0)) {
+        it.print(0, 1, time_str.c_str());
+      }
+
+
 status_led:
-  pin: D4
-
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-
-  # Optional fallback AP configuration
-  ap:
-    ssid: "1602-Testing-AP"
-    password: "fallback-password"
-
-# Enable web server for testing (optional)
-web_server:
-
-# API & OTA for ESPHome
-api:
-ota:
-  platform: esphome
+  pin: D5
